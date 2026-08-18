@@ -1,12 +1,12 @@
 # Setup
 
-Everything you need to get OpenReply running end to end, in one place: hosting, the domain, environment variables, and the Meta app. Read it in order. The code deploys in minutes. The Meta side is the part that takes real time, so budget an afternoon the first time.
+Everything you need to get OpenDM running end to end, in one place: hosting, the domain, environment variables, and the Meta app. Read it in order. The code deploys in minutes. The Meta side is the part that takes real time, so budget an afternoon the first time.
 
 If you would rather have an AI assistant drive most of this, skip to [Set it up with an AI assistant](#set-it-up-with-an-ai-assistant) at the end and come back here when it asks for specifics.
 
 ## How it is built
 
-OpenReply is two processes and two datastores.
+OpenDM is two processes and two datastores.
 
 - Web app and API: Next.js. Serves the dashboard, the OAuth callback, and the incoming webhook. Runs well on Vercel.
 - Worker: a long-running Node process (`npm run worker`) that consumes the send queue and runs the polling reconciler. It cannot run on Vercel, because serverless functions are short-lived and a queue consumer has to stay up. Railway, Render, Fly, or any always-on box works.
@@ -78,7 +78,7 @@ DATABASE_URL="postgresql://...proxy.rlwy.net.../railway" npm run db:migrate
 
 Note on crons: Vercel's free plan allows each cron to run at most once per day. The repo's crons are set to daily for that reason. The comment polling reconciler does not use a Vercel cron; it runs inside the Railway worker on its own interval, so the free plan is not a constraint there.
 
-Optional custom domain: if you want `openreply.yoursite.com` instead of the Vercel URL, add it in Vercel under Domains and make it primary. Then update `NEXTAUTH_URL` and the two Meta URLs (Step 7 and Step 8 below) to the new domain, and update the worker's `NEXTAUTH_URL` too, or tracked links in DMs will point at the old domain.
+Optional custom domain: if you want `opendm.yoursite.com` instead of the Vercel URL, add it in Vercel under Domains and make it primary. Then update `NEXTAUTH_URL` and the two Meta URLs (Step 7 and Step 8 below) to the new domain, and update the worker's `NEXTAUTH_URL` too, or tracked links in DMs will point at the old domain.
 
 ## Environment variables
 
@@ -122,7 +122,7 @@ Go to [developers.facebook.com/apps](https://developers.facebook.com/apps) and c
 - App type: Business.
 - Contact email: one you actually check.
 
-When it asks you to add a use case, filter to All, then choose Manage messaging and content on Instagram. Do not pick "Create and manage ads with Marketing API", and do not pick "Authenticate with Facebook Login". OpenReply uses Instagram Login. Picking the Facebook Login variant makes the OAuth flow fail later with a mismatched client error.
+When it asks you to add a use case, filter to All, then choose Manage messaging and content on Instagram. Do not pick "Create and manage ads with Marketing API", and do not pick "Authenticate with Facebook Login". OpenDM uses Instagram Login. Picking the Facebook Login variant makes the OAuth flow fail later with a mismatched client error.
 
 If you accidentally added the Marketing API use case, remove it. It has its own heavy review requirements and can block publishing.
 
@@ -138,7 +138,7 @@ There are two app secrets and two app IDs, which is confusing. Here is what maps
 
 The Instagram app ID is not the same number as the Facebook App ID shown on the Basic settings page. Use the one under the Instagram product.
 
-OpenReply verifies webhook signatures against both `FACEBOOK_APP_SECRET` and `INSTAGRAM_APP_SECRET`, so you do not have to guess which one Meta signs with. Set both.
+OpenDM verifies webhook signatures against both `FACEBOOK_APP_SECRET` and `INSTAGRAM_APP_SECRET`, so you do not have to guess which one Meta signs with. Set both.
 
 ### Step 6: Add your Instagram account as a tester, and accept the invite
 
@@ -167,7 +167,7 @@ https://your-app.vercel.app/api/instagram/callback
 
 No trailing slash. If this is missing or wrong, connecting an account fails with a redirect_uri mismatch. You can register more than one, which is useful if you change domains later; keep the old and new both listed.
 
-You do not need the "Embed URL" that Meta shows here. OpenReply builds its own login URL. Users connect by opening your app, going to Settings, and clicking Connect Instagram.
+You do not need the "Embed URL" that Meta shows here. OpenDM builds its own login URL. Users connect by opening your app, going to Settings, and clicking Connect Instagram.
 
 ### Step 8: Configure the webhook
 
@@ -186,7 +186,7 @@ If your primary domain ever changes, update this callback URL to the new domain.
 
 Real comment webhooks are only delivered when the app is in Live state. In Development mode, only the console Test button delivers events. This is the single most common reason for "I set everything up and nothing happens."
 
-Go to the Publish item in the left sidebar. Set the privacy policy, terms of service, and data deletion URLs first, or it will not let you publish. OpenReply ships these pages, on your Vercel domain:
+Go to the Publish item in the left sidebar. Set the privacy policy, terms of service, and data deletion URLs first, or it will not let you publish. OpenDM ships these pages, on your Vercel domain:
 
 ```
 https://your-app.vercel.app/privacy
@@ -216,16 +216,16 @@ The fix for your own accounts is the same two-part dance as Step 6, once per acc
 
 ### The account ID trap (informational)
 
-You do not have to do anything here; OpenReply handles it. It is worth understanding because it is invisible when it goes wrong.
+You do not have to do anything here; OpenDM handles it. It is worth understanding because it is invisible when it goes wrong.
 
-Meta's `/me` returns two IDs. The `id` field is app-scoped. The `user_id` field is the Instagram professional account ID. Webhooks put `user_id` in `entry.id`, and the messaging API keys off `user_id` too. OpenReply stores `user_id`, so a fresh connection matches correctly. If you upgraded from a very old build and an account was stored with the wrong ID, disconnect and reconnect it once.
+Meta's `/me` returns two IDs. The `id` field is app-scoped. The `user_id` field is the Instagram professional account ID. Webhooks put `user_id` in `entry.id`, and the messaging API keys off `user_id` too. OpenDM stores `user_id`, so a fresh connection matches correctly. If you upgraded from a very old build and an account was stored with the wrong ID, disconnect and reconnect it once.
 
 ## Test it end to end
 
 1. Make sure the account is a tester and has accepted the invite (Step 6), and the app is published (Step 9).
 2. Connect it in the app: Settings, Connect Instagram. You should reach Instagram's consent screen, not the "Insufficient Developer Role" error.
 3. Create a campaign on one of your posts with a keyword like `TEST`.
-4. From a different Instagram account, comment `TEST` on that post. It must be a different account, because OpenReply ignores your own comments on purpose.
+4. From a different Instagram account, comment `TEST` on that post. It must be a different account, because OpenDM ignores your own comments on purpose.
 5. Watch for the DM. If nothing arrives, check the DM Logs page and `/api/health`.
 
 Hit `/api/health` any time. It reports the database, Redis, queue, and worker heartbeat. If `worker.healthy` is false, the worker is not running or cannot reach Redis, and no DM will send even though webhooks are being received.
@@ -234,31 +234,41 @@ If you want to inspect where a comment stopped, the Postgres tables tell you: `W
 
 ## Local development
 
-You need Postgres and Redis. The included `docker-compose.yml` starts both:
+The included Compose stack runs the complete application: PostgreSQL, Redis,
+database migrations, the Next.js web app, and the background worker. Docker is
+the only local prerequisite.
 
 ```bash
-docker-compose up -d
-npm run db:generate
-npm run db:migrate
+cp .env.example .env
+# Fill in the Meta and email values in .env, then:
+docker compose up --build
 ```
 
-Or install them natively (macOS):
+The app is available at `http://localhost:3000`. PostgreSQL and Redis are bound
+only to localhost, on ports `5432` and `6379`. Migrations run in the one-shot
+`migrate` container before the web app and worker start.
+
+Useful commands:
 
 ```bash
-brew install postgresql@16 redis
-brew services start postgresql@16
-brew services start redis
-createdb openreply
+docker compose ps
+docker compose logs -f web worker
+docker compose down
 ```
 
-Then set `DATABASE_URL` to match your local user, for example `postgresql://YOUR_USER@localhost:5432/openreply`.
+Application data is stored in the named `pgdata` and `redisdata` volumes, so
+`docker compose down` does not erase it. To intentionally reset all local data,
+run `docker compose down --volumes`.
 
-Run the two processes in separate terminals:
+For development with source mounts and Next.js hot reload, use the override:
 
 ```bash
-npm run dev
-npm run worker
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
+
+The Compose file supplies safe local defaults so the containers can boot, but
+Instagram OAuth, webhooks, and magic-link delivery require real values in
+`.env`. Never use the local default secrets for a public deployment.
 
 For Meta to reach your local webhook, run a tunnel and point `NEXTAUTH_URL` and the Meta webhook and redirect URLs at the tunnel:
 
@@ -273,7 +283,7 @@ If you run an AI coding assistant like Claude Code or Cursor, it can drive most 
 A word of caution: the assistant will need real secrets to finish (Meta app secrets, a Resend key, database URLs). Only paste those into a tool and environment you trust, and rotate them afterward if you are unsure.
 
 ```
-You are helping me self-host OpenReply, an open source Instagram comment-to-DM
+You are helping me self-host OpenDM, an open source Instagram comment-to-DM
 automation tool, in this repository. Read README.md and docs/setup.md first, then
 help me get it running end to end.
 
@@ -322,7 +332,7 @@ By the end, `/api/health` returns `status: ok` with `worker.healthy: true`, and 
 
 ## Letting other people use your instance
 
-Everything above is enough to run OpenReply for your own accounts, or a handful of accounts you add as testers. No App Review needed.
+Everything above is enough to run OpenDM for your own accounts, or a handful of accounts you add as testers. No App Review needed.
 
 For a stranger to connect their own Instagram to your hosted instance, Meta requires App Review granting Advanced Access on the messaging and comments permissions. That means:
 

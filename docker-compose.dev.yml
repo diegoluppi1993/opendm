@@ -1,0 +1,30 @@
+# Development override with source mounts and Next.js hot reload.
+# Run: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+
+services:
+  web:
+    build:
+      context: .
+      target: development
+    command: ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
+    environment:
+      NODE_ENV: development
+    volumes:
+      - .:/app
+      - web_node_modules:/app/node_modules
+      - web_next:/app/.next
+
+  worker:
+    build:
+      context: .
+      target: development
+    environment:
+      NODE_ENV: development
+    volumes:
+      - .:/app
+      - worker_node_modules:/app/node_modules
+
+volumes:
+  web_node_modules:
+  web_next:
+  worker_node_modules:
