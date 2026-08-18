@@ -1,34 +1,120 @@
-# OpenReply — Local Development Services
-# Run: docker-compose up -d
+# OpenDM — complete self-hosted stack
+# Run: docker compose up --build
 
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: openreply
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-opendm}
+      POSTGRES_USER: ${POSTGRES_USER:-opendm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opendm-local-password}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+        ]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
+      retries: 10
+
+  migrate:
+    image: opendm-app:local
+    build:
+      context: .
+      target: runtime
+    command: ["npm", "run", "db:migrate"]
+    restart: "no"
+    environment: &app-environment
+      NODE_ENV: production
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-opendm-local-nextauth-secret-change-me}
+      CRON_SECRET: ${CRON_SECRET:-opendm-local-cron-secret-change-me}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-opendm}:${POSTGRES_PASSWORD:-opendm-local-password}@postgres:5432/${POSTGRES_DB:-opendm}
+      REDIS_URL: redis://redis:6379
+      EMAIL_FROM: ${EMAIL_FROM:-OpenDM <login@example.com>}
+      EMAIL_SERVER: ${EMAIL_SERVER:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      META_GRAPH_API_VERSION: ${META_GRAPH_API_VERSION:-v25.0}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-not-configured}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-not-configured}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-not-configured}
+      WEBHOOK_VERIFY_TOKEN: ${WEBHOOK_VERIFY_TOKEN:-opendm-local-webhook-token}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    image: opendm-app:local
+    build:
+      context: .
+      target: runtime
+    command: ["npm", "start", "--", "--hostname", "0.0.0.0"]
+    restart: unless-stopped
+    environment: *app-environment
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/manifest.webmanifest').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    image: opendm-app:local
+    build:
+      context: .
+      target: runtime
+    command: ["npm", "run", "worker"]
+    restart: unless-stopped
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"require('net').connect(6379,'redis').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\"",
+        ]
+      interval: 15s
+      timeout: 5s
       retries: 5
+      start_period: 15s
 
 volumes:
   pgdata:
