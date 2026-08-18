@@ -79,6 +79,8 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
 
 Full environment variables and the production layout are in [docs/setup.md](docs/setup.md).
+For a concise Docker deployment checklist on an existing Ubuntu server, see
+[docs/deploy-ubuntu.md](docs/deploy-ubuntu.md).
 
 ## Set it up with your AI assistant
 
