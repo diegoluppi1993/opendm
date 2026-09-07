@@ -63,8 +63,9 @@ The honest version: the code deploys in minutes, but the Meta app setup is the p
 ```bash
 git clone https://github.com/diegoluppi1993/opendm.git
 cd opendm
-cp .env.example .env      # then fill in the Meta and email values
-docker compose up --build
+cp .env.example .env
+# Edit .env and replace every required placeholder with production values.
+docker compose up -d --build
 ```
 
 The Compose stack builds the application, starts PostgreSQL and Redis, applies
