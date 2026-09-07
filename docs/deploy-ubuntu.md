@@ -37,7 +37,7 @@ openssl rand -hex 32
 openssl rand -hex 32
 
 # POSTGRES_PASSWORD (hex avoids characters that need URL encoding)
-openssl rand -hex 24
+openssl rand -hex 32
 ```
 
 Never reuse these values between unrelated installations. In particular,
@@ -93,10 +93,8 @@ POSTGRES_DB=opendm
 POSTGRES_USER=opendm
 POSTGRES_PASSWORD=CHANGE_ME
 
-# Optional host ports
+# Published web port (PostgreSQL and Redis stay on the internal network)
 APP_PORT=3000
-POSTGRES_PORT=5432
-REDIS_PORT=6379
 
 # Email magic links
 RESEND_API_KEY=CHANGE_ME

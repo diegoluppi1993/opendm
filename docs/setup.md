@@ -240,13 +240,15 @@ the only local prerequisite.
 
 ```bash
 cp .env.example .env
-# Fill in the Meta and email values in .env, then:
-docker compose up --build
+# Replace every required placeholder in .env, then:
+docker compose up -d --build
 ```
 
-The app is available at `http://localhost:3000`. PostgreSQL and Redis are bound
-only to localhost, on ports `5432` and `6379`. Migrations run in the one-shot
-`migrate` container before the web app and worker start.
+The app is available at `http://localhost:3000`. PostgreSQL and Redis are
+reachable only by services on the internal Compose network; they do not publish
+host ports. Migrations run in the one-shot `migrate` container after PostgreSQL
+is healthy and before the web app and worker start. Both runtime services also
+wait for Redis to become healthy.
 
 Useful commands:
 
@@ -266,9 +268,10 @@ For development with source mounts and Next.js hot reload, use the override:
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
 
-The Compose file supplies safe local defaults so the containers can boot, but
-Instagram OAuth, webhooks, and magic-link delivery require real values in
-`.env`. Never use the local default secrets for a public deployment.
+Compose refuses to start unless `POSTGRES_PASSWORD`, `NEXTAUTH_SECRET`,
+`CRON_SECRET`, `ENCRYPTION_KEY`, and `WEBHOOK_VERIFY_TOKEN` are set. Replace all
+placeholders in `.env`; Instagram OAuth, webhooks, and magic-link delivery also
+require valid Meta and email-provider values.
 
 For Meta to reach your local webhook, run a tunnel and point `NEXTAUTH_URL` and the Meta webhook and redirect URLs at the tunnel:
 

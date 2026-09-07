@@ -1,5 +1,5 @@
 # OpenDM — complete self-hosted stack
-# Run: docker compose up --build
+# Run: docker compose up -d --build
 
 services:
   postgres:
@@ -8,9 +8,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-opendm}
       POSTGRES_USER: ${POSTGRES_USER:-opendm}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opendm-local-password}
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -27,8 +25,6 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -47,19 +43,19 @@ services:
     environment: &app-environment
       NODE_ENV: production
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-opendm-local-nextauth-secret-change-me}
-      CRON_SECRET: ${CRON_SECRET:-opendm-local-cron-secret-change-me}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-opendm}:${POSTGRES_PASSWORD:-opendm-local-password}@postgres:5432/${POSTGRES_DB:-opendm}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is required}
+      CRON_SECRET: ${CRON_SECRET:?CRON_SECRET is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-opendm}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-opendm}
       REDIS_URL: redis://redis:6379
       EMAIL_FROM: ${EMAIL_FROM:-OpenDM <login@example.com>}
       EMAIL_SERVER: ${EMAIL_SERVER:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       META_GRAPH_API_VERSION: ${META_GRAPH_API_VERSION:-v25.0}
-      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-not-configured}
-      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-not-configured}
-      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-not-configured}
-      WEBHOOK_VERIFY_TOKEN: ${WEBHOOK_VERIFY_TOKEN:-opendm-local-webhook-token}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
+      WEBHOOK_VERIFY_TOKEN: ${WEBHOOK_VERIFY_TOKEN:?WEBHOOK_VERIFY_TOKEN is required}
     depends_on:
       postgres:
         condition: service_healthy
