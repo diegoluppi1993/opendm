@@ -34,12 +34,45 @@ import {
 } from "@/lib/billing/usage";
 import { recordWorkerAlert } from "@/lib/ops/worker-health";
 import {
+  MAX_COMMENT_SEND_ATTEMPTS,
+  SEND_CLAIM_MESSAGE,
+  UNCONFIRMED_PREFIX,
+  hasUnconfirmedDelivery,
+  isConfirmedSendRejection,
+  unconfirmedMessage,
+} from "@/lib/instagram/delivery-errors";
+import {
   buildTrackedUrl,
   renderMessageWithTracking,
   renderMessageWithoutLink,
 } from "@/lib/tracking/message";
 
 const BACKOFF_DELAYS = [5 * 60 * 1000, 15 * 60 * 1000, 45 * 60 * 1000];
+
+// How long to wait before re-checking a follow that came back false: one
+// delay per re-check, each counted from the previous check.
+//
+// `is_user_follow_business` does not reflect a brand-new follow right away, and
+// the follow gate asks people to follow and tap a button that is sitting in
+// front of them — so tapping seconds after following is the normal case, not
+// the exception. Rejecting on the first `false` therefore turns away the exact
+// people who did what was asked, and they get told to follow an account they
+// already follow.
+//
+// Two checks rather than one long wait: measured, a follow still read `false`
+// 17 s after it happened and `true` by ~68 s. An early check catches the fast
+// ones sooner; the last still covers the slow ones.
+// (Ported from diwenne/openreply #73.)
+const FOLLOW_RECHECK_DELAYS_MS = (
+  process.env.FOLLOW_RECHECK_DELAYS_MS ?? "20000,40000"
+)
+  .split(",")
+  .map(Number)
+  .filter((ms) => ms > 0);
+const FOLLOW_RECHECK_TOTAL_MS = FOLLOW_RECHECK_DELAYS_MS.reduce(
+  (total, ms) => total + ms,
+  0
+);
 
 function formatError(error: unknown): string {
   if (error instanceof MetaApiError) {
@@ -49,6 +82,53 @@ function formatError(error: unknown): string {
     return error.message;
   }
   return "Unknown error";
+}
+
+// A durable, atomic claim precedes each external send. If the process dies
+// after the send but before the log write — or the final write fails — the row
+// still carries the claim and the uncertain send is never repeated. Two jobs
+// racing for the same comment cannot both win it either.
+// (Ported from diwenne/openreply #68; the claim lives in the existing text
+// columns instead of dedicated booleans, so it needs no migration.)
+const notUnconfirmed = (field: "errorMessage" | "publicReplyError") => ({
+  OR: [{ [field]: null }, { NOT: { [field]: { startsWith: UNCONFIRMED_PREFIX } } }],
+});
+
+async function claimDmSend(
+  automationId: string,
+  commentId: string
+): Promise<boolean> {
+  const result = await prisma.dmLog.updateMany({
+    where: {
+      automationId,
+      commentId,
+      status: { not: "SENT" },
+      attempts: { lt: MAX_COMMENT_SEND_ATTEMPTS },
+      ...notUnconfirmed("errorMessage"),
+    },
+    data: {
+      status: "PENDING",
+      attempts: { increment: 1 },
+      errorMessage: SEND_CLAIM_MESSAGE,
+    },
+  });
+  return result.count === 1;
+}
+
+async function claimPublicReplySend(
+  automationId: string,
+  commentId: string
+): Promise<boolean> {
+  const result = await prisma.dmLog.updateMany({
+    where: {
+      automationId,
+      commentId,
+      publicReplySentAt: null,
+      ...notUnconfirmed("publicReplyError"),
+    },
+    data: { publicReplyError: SEND_CLAIM_MESSAGE },
+  });
+  return result.count === 1;
 }
 
 // Meta rejections that a plain-text retry cannot fix: the send was refused for
@@ -248,13 +328,29 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
 
     const alreadyDmd = existingLog?.status === "SENT";
     const alreadyPublicReplied = Boolean(existingLog?.publicReplySentAt);
-    const needsDm = !alreadyDmd;
+    // A leg whose earlier send may have been delivered is closed for good —
+    // sending again risks a duplicate in the person's inbox. The DM leg is also
+    // closed once its attempts, counted across jobs, are used up.
+    const dmUnconfirmed = hasUnconfirmedDelivery(
+      existingLog?.errorMessage,
+      existingLog?.status === "FAILED"
+    );
+    const dmExhausted = (existingLog?.attempts ?? 0) >= MAX_COMMENT_SEND_ATTEMPTS;
+    const publicReplyUnconfirmed = hasUnconfirmedDelivery(
+      existingLog?.publicReplyError
+    );
+    const needsDm = !alreadyDmd && !dmUnconfirmed && !dmExhausted;
 
     // Skip only when there is genuinely nothing left to do. A comment whose DM
     // already sent but whose public reply never posted (e.g. it hit a rate
     // limit) must still come back so the public reply can be retried.
     if (existingLog?.status === "SKIPPED_PLAN_LIMIT") continue;
-    if (alreadyDmd && (alreadyPublicReplied || !automation.publicReplyEnabled)) {
+    if (
+      !needsDm &&
+      (alreadyPublicReplied ||
+        publicReplyUnconfirmed ||
+        !automation.publicReplyEnabled)
+    ) {
       continue;
     }
 
@@ -332,7 +428,6 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           commentId,
           matchedKeyword: matchResult.matchedKeyword,
           status: "PENDING",
-          attempts: job.attemptsMade + 1,
         },
       });
     } else if (needsDm) {
@@ -342,7 +437,6 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         },
         data: {
           status: "PENDING",
-          attempts: job.attemptsMade + 1,
           matchedKeyword: matchResult.matchedKeyword,
           errorMessage: null,
         },
@@ -361,7 +455,9 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
     if (
       automation.publicReplyEnabled &&
       replyPool.length > 0 &&
-      !existingLog?.publicReplySentAt
+      !existingLog?.publicReplySentAt &&
+      !publicReplyUnconfirmed &&
+      (await claimPublicReplySend(automation.id, commentId))
     ) {
       try {
         const chosen = replyPool[Math.floor(Math.random() * replyPool.length)];
@@ -382,12 +478,18 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           "[DM Worker] Public comment reply failed:",
           formatError(error)
         );
+        // A confirmed rejection can be retried on a later pass. Anything else may
+        // have posted the reply, so the claim stays and nothing is re-sent.
         await prisma.dmLog
           .update({
             where: {
               automationId_commentId: { automationId: automation.id, commentId },
             },
-            data: { publicReplyError: formatError(error) },
+            data: {
+              publicReplyError: isConfirmedSendRejection(error)
+                ? formatError(error)
+                : unconfirmedMessage(formatError(error)),
+            },
           })
           .catch(() => {});
       }
@@ -540,6 +642,18 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       sendFollowPrompt = alreadyFollows !== true;
     }
 
+    // Claim the send before making it (see claimDmSend). Losing the claim means
+    // another job — or a previous run that died mid-send — already owns this
+    // DM, so hand back what was reserved for it and move on.
+    if (!(await claimDmSend(automation.id, commentId))) {
+      if (rateLimit?.reserved) await releaseDMSlot(instagramAccountId);
+      await releaseWorkspaceDMReservation(
+        automation.workspaceId,
+        usage.periodStart
+      );
+      continue;
+    }
+
     try {
       if (useOpeningDm) {
         const openingText = renderMessageWithTracking({
@@ -553,9 +667,9 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           commentId,
           openingText,
           automation.openingDmButtonLabel as string,
-          automation.requireFollow
-            ? `followcheck:${automation.id}`
-            : `reveal:${automation.id}`
+          // The ":open" marker tells a tap here apart from the follow prompt's
+          // own "I'm following" button, which sends the same prefix.
+          `${automation.requireFollow ? "followcheck" : "reveal"}:${automation.id}:open`
         );
       } else if (sendFollowPrompt) {
         const promptText = renderMessageWithoutLink({
@@ -650,9 +764,39 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         },
       });
     } catch (error) {
-      // The rate slot was reserved before the send; this send did not deliver a
-      // DM, so hand the slot back instead of burning it (and burning more on
-      // each BullMQ retry) until the hourly TTL expires.
+      if (!isConfirmedSendRejection(error)) {
+        // Meta answered with an error (notably the generic code 1) or the
+        // request never got an answer, but the DM may well have been delivered
+        // anyway — in production code 1 arrived *after* the message had reached
+        // the recipient. Retrying would put another copy in their inbox, and a
+        // plain FAILED row would make the reconciler re-enqueue the comment on
+        // every sweep: that is how one person received dozens of identical DMs.
+        // So: keep what was reserved (the message may count), mark the row
+        // unconfirmed, and do not throw, which stops BullMQ's retries. If it
+        // really did not go out, that person can simply comment again.
+        // (Ported from diwenne/openreply #68 and #70.)
+        await prisma.dmLog.update({
+          where: {
+            automationId_commentId: {
+              automationId: automation.id,
+              commentId,
+            },
+          },
+          data: {
+            status: "FAILED",
+            errorMessage: unconfirmedMessage(formatError(error)),
+          },
+        });
+        console.error(
+          "[DM Worker] DM delivery unconfirmed, not retrying:",
+          formatError(error)
+        );
+        continue;
+      }
+
+      // Explicitly rejected, so nothing was delivered. The rate slot was
+      // reserved before the send; hand it back instead of burning it (and
+      // burning more on each BullMQ retry) until the hourly TTL expires.
       if (rateLimit?.reserved) {
         await releaseDMSlot(instagramAccountId);
       }
@@ -670,12 +814,48 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         },
         data: {
           status: "FAILED",
-          attempts: job.attemptsMade + 1,
           errorMessage: formatError(error),
         },
       });
       throw error;
     }
+  }
+}
+
+// Tells someone whose "I'm following" tap is being re-checked that it is being
+// looked at, so the chat does not sit silent while Instagram catches up with
+// the follow. Opt-in through FOLLOW_RECHECK_ACK_MESSAGE, and best-effort: it
+// never holds up the re-check, which is already queued when this runs.
+async function sendFollowRecheckAck({
+  accessToken,
+  instagramId,
+  automationId,
+  userId,
+}: {
+  accessToken: string;
+  instagramId: string;
+  automationId: string;
+  userId: string;
+}): Promise<void> {
+  const message = process.env.FOLLOW_RECHECK_ACK_MESSAGE?.trim();
+  if (!message) return;
+  try {
+    // One acknowledgement per re-check cycle: a burst of taps collapses into a
+    // single re-check (bucketed job id) and should get a single reply too.
+    const first = await getRedisConnection().set(
+      `follow_recheck_ack:${automationId}:${userId}`,
+      "1",
+      "PX",
+      FOLLOW_RECHECK_TOTAL_MS,
+      "NX"
+    );
+    if (first !== "OK") return;
+    await sendDirectMessage(accessToken, instagramId, userId, message);
+  } catch (error) {
+    console.log(
+      "[DM Worker] Failed to send follow re-check acknowledgement:",
+      formatError(error)
+    );
   }
 }
 
@@ -689,9 +869,12 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
 
   const isFollowCheck = payload.startsWith("followcheck:");
   if (!isFollowCheck && !payload.startsWith("reveal:")) return;
-  const automationId = payload.slice(
-    isFollowCheck ? "followcheck:".length : "reveal:".length
-  );
+  // The opening DM's button appends ":open" to the payload; the follow
+  // prompt's button does not. Automation ids are cuids and contain no colon.
+  const [automationId, marker] = payload
+    .slice(isFollowCheck ? "followcheck:".length : "reveal:".length)
+    .split(":");
+  const fromOpeningDm = marker === "open";
 
   const automation = await prisma.automation.findFirst({
     where: { id: automationId, isActive: true },
@@ -746,13 +929,86 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
   // Follow-gate: before revealing the link, verify the user follows. On a
   // `followcheck:` tap a non-follower gets the prompt again (no quota spent);
   // on a read fallback a non-follower is silently skipped — the gate must not
-  // be bypassable by just reading the DM and waiting. Following, or
-  // unverifiable (null), falls through and delivers the link — fail-open so a
+  // be bypassable by just reading the DM and waiting. On a tap, following or
+  // unverifiable (null) falls through and delivers the link — fail-open so a
   // real follower is never trapped.
   if ((isFollowCheck || fallback) && automation.requireFollow) {
     const follows = await getUserFollowStatus(accessToken, userId);
+    // A read fallback needs a confirmed follow. Instagram only reports follow
+    // status once the person has tapped a button (before that it answers
+    // "User consent is required", i.e. null), so failing open here would hand
+    // the link to anyone who read the opening DM and waited, follower or not.
+    // (Ported from diwenne/openreply #74.)
+    if (fallback && follows !== true) return;
     if (follows === false) {
       if (fallback) return;
+
+      // A tap on an opening-DM button is not a claim to follow — most people
+      // who tap it simply don't follow yet — so they get the follow prompt
+      // right away. Only the prompt's own button earns the delayed re-check;
+      // holding an opening tap for it left people staring at a silent chat.
+      if (!fromOpeningDm) {
+        // A `false` on a button tap: give the follow time to register and look
+        // again, rather than rejecting someone who just followed.
+        //
+        // The job id is bucketed by the recheck window, not fixed per user.
+        // BullMQ keeps completed jobs (removeOnComplete: count 1000) and
+        // silently drops an add whose id is still retained, so a fixed id let a
+        // person be re-checked once and then never again. Bucketing still
+        // collapses a burst of taps into a single re-check.
+        //
+        // Jobs queued before re-checks were counted carry only `followRecheck`,
+        // which meant one re-check done.
+        const rechecksDone =
+          job.data.followRecheckAttempt ?? (job.data.followRecheck ? 1 : 0);
+        if (rechecksDone < FOLLOW_RECHECK_DELAYS_MS.length) {
+          const delay = FOLLOW_RECHECK_DELAYS_MS[rechecksDone];
+          const window = Math.floor(Date.now() / delay);
+          await getDMQueue().add(
+            POSTBACK_JOB_NAME,
+            {
+              ...job.data,
+              followRecheck: true,
+              followRecheckAttempt: rechecksDone + 1,
+            },
+            {
+              delay,
+              jobId: `postback_recheck_${automation.id}_${userId}_${rechecksDone + 1}_${window}`,
+            }
+          );
+          if (rechecksDone === 0) {
+            await sendFollowRecheckAck({
+              accessToken,
+              instagramId: automation.instagramAccount.instagramId,
+              automationId: automation.id,
+              userId,
+            });
+          }
+          return;
+        }
+
+        // Last `false`: they are genuinely not following. Record it — this
+        // branch used to return without writing anything at all, so a gate that
+        // turned people away left no trace and its rejection rate could not be
+        // measured, only guessed at from complaints.
+        await prisma.operationalEvent
+          .create({
+            data: {
+              workspaceId: automation.workspaceId,
+              source: "WORKER",
+              level: "INFO",
+              message: "Follow gate rejected a button tap",
+              payload: {
+                automationId: automation.id,
+                automationName: automation.name,
+                userId,
+                commenterName,
+              },
+            },
+          })
+          .catch(() => {});
+      }
+
       const promptText = renderMessageWithoutLink({
         message:
           automation.followPromptMessage ||
