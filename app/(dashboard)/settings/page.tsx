@@ -137,7 +137,9 @@ export default function SettingsPage() {
       </Suspense>
 
       <section className="panel rounded p-4 sm:p-6">
-        <h2 className="text-base font-semibold mb-6">Instagram Connection</h2>
+        <h2 className="text-base font-semibold mb-6">
+          Instagram &amp; Facebook Connection
+        </h2>
 
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3 py-3 border-b border-border">
@@ -162,7 +164,7 @@ export default function SettingsPage() {
             <div>
               <p className="text-sm font-medium text-foreground">Accounts</p>
               <p className="text-xs text-muted mt-0.5">
-                {accounts.length} connected Instagram profile
+                {accounts.length} connected account
                 {accounts.length === 1 ? "" : "s"}
               </p>
             </div>
@@ -174,7 +176,8 @@ export default function SettingsPage() {
           <div className="space-y-3 py-3">
             {accounts.length === 0 && (
               <p className="text-sm text-muted">
-                Connect an Instagram professional account to launch campaigns.
+                Connect an Instagram professional account or a Facebook Page to
+                launch campaigns.
               </p>
             )}
             {accounts.map((account) => (
@@ -184,13 +187,21 @@ export default function SettingsPage() {
               >
                 <div>
                   <p className="text-sm font-semibold text-foreground">
-                    @{account.username}
+                    {account.platform === "FACEBOOK"
+                      ? account.username
+                      : `@${account.username}`}
+                    <span className="ml-2 rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold uppercase text-muted">
+                      {account.platform === "FACEBOOK" ? "Facebook Page" : "Instagram"}
+                    </span>
                   </p>
                   <p className="mt-1 text-xs text-muted">
-                    Token expires{" "}
-                    {account.tokenExpiresAt
-                      ? new Date(account.tokenExpiresAt).toLocaleDateString()
-                      : "not available"}{" "}
+                    {account.platform === "FACEBOOK"
+                      ? "Page token does not expire"
+                      : `Token expires ${
+                          account.tokenExpiresAt
+                            ? new Date(account.tokenExpiresAt).toLocaleDateString()
+                            : "not available"
+                        }`}{" "}
                     · {account.webhookSubscribed ? "Webhook ready" : "Webhook pending"}
                   </p>
                 </div>
@@ -214,6 +225,12 @@ export default function SettingsPage() {
             className="px-4 py-2 rounded text-sm font-medium transition-colors bg-accent text-white hover:bg-accent-hover"
           >
             {accounts.length > 0 ? "Connect another account" : "Connect Instagram"}
+          </a>
+          <a
+            href="/api/facebook/connect"
+            className="px-4 py-2 rounded text-sm font-medium transition-colors border border-border text-foreground hover:bg-surface"
+          >
+            Connect Facebook Page
           </a>
         </div>
       </section>

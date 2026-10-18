@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentWorkspaceId } from "@/lib/auth";
 import { getWorkspaceInstagramAccount } from "@/lib/instagram-accounts";
 import { getAllUserMedia, getUserMedia } from "@/lib/meta/client";
+import { getFacebookPagePosts } from "@/lib/meta/facebook";
 import { decryptToken } from "@/lib/meta/oauth";
 
 export async function GET(request: NextRequest) {
@@ -15,7 +16,8 @@ export async function GET(request: NextRequest) {
 
   const account = await getWorkspaceInstagramAccount(
     workspaceId,
-    request.nextUrl.searchParams.get("instagramAccountId")
+    request.nextUrl.searchParams.get("instagramAccountId"),
+    "ANY"
   );
 
   if (!account) {
@@ -35,7 +37,17 @@ export async function GET(request: NextRequest) {
     // otherwise return a single recent page.
     const loadAll = request.nextUrl.searchParams.get("all") === "true";
     let posts;
-    if (loadAll) {
+    if (account.platform === "FACEBOOK") {
+      // The Page's posts, mapped to the same shape the picker renders.
+      const limitParam = request.nextUrl.searchParams.get("limit");
+      const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : 25;
+      const limit = loadAll
+        ? 300
+        : Number.isFinite(parsedLimit)
+          ? Math.min(Math.max(parsedLimit, 1), 50)
+          : 25;
+      posts = await getFacebookPagePosts(accessToken, account.instagramId, limit);
+    } else if (loadAll) {
       posts = await getAllUserMedia(accessToken, 300);
     } else {
       const limitParam = request.nextUrl.searchParams.get("limit");

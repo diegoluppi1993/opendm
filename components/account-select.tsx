@@ -5,6 +5,8 @@ export interface AccountOption {
   username: string;
   instagramId: string;
   name?: string | null;
+  /** INSTAGRAM unless the account is a connected Facebook Page. */
+  platform?: "INSTAGRAM" | "FACEBOOK";
 }
 
 interface AccountSelectProps {

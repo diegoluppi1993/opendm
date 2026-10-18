@@ -366,6 +366,11 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
 
   const username =
     accounts.find((a) => a.id === selectedAccountId)?.username ?? "yourbrand";
+  // A Facebook Page has no follower check, no opening-DM button flow, no DM
+  // keyword trigger and no "next post" mode, so those controls are hidden and
+  // always saved as off for it.
+  const isFacebook =
+    accounts.find((a) => a.id === selectedAccountId)?.platform === "FACEBOOK";
 
   function handlePostSelect(
     id: string,
@@ -402,15 +407,19 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
       instagramAccountId: selectedAccountId,
       postId: triggerScope === "specific" ? postId : null,
       postUrl: triggerScope === "specific" ? postUrl : null,
-      matchAnyPost: triggerScope === "any",
-      pendingNextReel: triggerScope === "next",
+      // "next post" does not exist on Facebook; treat it as any post.
+      matchAnyPost:
+        triggerScope === "any" || (isFacebook && triggerScope === "next"),
+      pendingNextReel: !isFacebook && triggerScope === "next",
       matchAnyWord: matchMode === "any",
       keywords: matchMode === "any" ? [] : keywords,
-      dmTriggerEnabled,
+      dmTriggerEnabled: isFacebook ? false : dmTriggerEnabled,
       dmMessage,
-      openingDmEnabled,
-      openingDmMessage: openingDmEnabled ? openingDmMessage : null,
-      openingDmButtonLabel: openingDmEnabled ? openingDmButtonLabel : null,
+      openingDmEnabled: isFacebook ? false : openingDmEnabled,
+      openingDmMessage:
+        !isFacebook && openingDmEnabled ? openingDmMessage : null,
+      openingDmButtonLabel:
+        !isFacebook && openingDmEnabled ? openingDmButtonLabel : null,
       publicReplyEnabled,
       publicReplyMessages: publicReplyEnabled
         ? publicReplyMessages.map((m) => m.trim()).filter(Boolean)
@@ -419,9 +428,10 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
       linkButtonLabel: linkButtonLabel.trim() || "Open link",
       secondaryDestinationUrl: secondaryDestinationUrl.trim() || "",
       secondaryButtonLabel: secondaryButtonLabel.trim() || "Open link",
-      requireFollow,
-      followPromptMessage: requireFollow ? followPromptMessage.trim() : "",
-      followPromptButtonLabel: requireFollow
+      requireFollow: isFacebook ? false : requireFollow,
+      followPromptMessage:
+        !isFacebook && requireFollow ? followPromptMessage.trim() : "",
+      followPromptButtonLabel: !isFacebook && requireFollow
         ? followPromptButtonLabel.trim() || "i'm following"
         : "",
       followUpEnabled,
@@ -690,12 +700,14 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
           >
             any post or reel
           </Radio>
-          <Radio
-            checked={triggerScope === "next"}
-            onSelect={() => setTriggerScope("next")}
-          >
-            next post or reel
-          </Radio>
+          {!isFacebook && (
+            <Radio
+              checked={triggerScope === "next"}
+              onSelect={() => setTriggerScope("next")}
+            >
+              next post or reel
+            </Radio>
+          )}
         </Section>
 
         <Section title="And this comment has">
@@ -722,17 +734,19 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
           >
             any word
           </Radio>
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5">
-            <span className="text-sm text-foreground">
-              also reply when someone DMs{" "}
-              {matchMode === "any" ? "anything" : "these words"}
-            </span>
-            <Toggle
-              on={dmTriggerEnabled}
-              onToggle={() => setDmTriggerEnabled(!dmTriggerEnabled)}
-            />
-          </div>
-          {dmTriggerEnabled && (
+          {!isFacebook && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5">
+              <span className="text-sm text-foreground">
+                also reply when someone DMs{" "}
+                {matchMode === "any" ? "anything" : "these words"}
+              </span>
+              <Toggle
+                on={dmTriggerEnabled}
+                onToggle={() => setDmTriggerEnabled(!dmTriggerEnabled)}
+              />
+            </div>
+          )}
+          {!isFacebook && dmTriggerEnabled && (
             <p className="text-xs text-muted">
               {matchMode === "any"
                 ? "Every DM to this account gets the reply below — use with care."
@@ -798,6 +812,17 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
           )}
         </Section>
 
+        {isFacebook && (
+          <p className="rounded-lg border border-border p-3 text-xs text-muted">
+            Facebook Pages send the DM straight away to everyone who comments.
+            Meta offers no way to check whether someone follows a Page, so there
+            is no follow requirement or opening message. The DM may land in the
+            person&apos;s Message requests or Spam folder — say so in your public
+            reply.
+          </p>
+        )}
+
+        {!isFacebook && (
         <Section title="They will get">
           <div className="rounded-lg border border-border p-3">
             <div className="flex items-center justify-between">
@@ -863,6 +888,7 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
             )}
           </div>
         </Section>
+        )}
 
         <Section title="And then, they will get">
           <div className="rounded-lg border border-border p-3 space-y-2">

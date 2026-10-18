@@ -53,11 +53,19 @@ interface WebhookEntry {
       from?: {
         id?: string;
         username?: string;
+        name?: string;
       };
       media?: {
         id?: string;
       };
       media_id?: string;
+      // Facebook Page `feed` change (object "page"): `item` says what changed
+      // and `verb` how; a comment's `post_id` is `<pageId>_<postId>`.
+      item?: string;
+      verb?: string;
+      post_id?: string;
+      parent_id?: string;
+      message?: string;
     };
   }>;
   messaging?: Array<{
@@ -135,6 +143,50 @@ export function parseCommentEvents(payload: WebhookPayload): WebhookCommentEvent
         commenterId,
         commenterName: value.from?.username,
         mediaId,
+      });
+    }
+  }
+
+  return events;
+}
+
+/**
+ * Parse new comments on a Facebook Page's posts (webhook object "page", field
+ * "feed"). Only top-level comments count: replies to a comment (their
+ * `parent_id` is another comment, not the post) and the Page's own comments are
+ * dropped, because a private reply to either would be rejected by Meta.
+ */
+export function parseFacebookCommentEvents(
+  payload: WebhookPayload
+): WebhookCommentEvent[] {
+  const events: WebhookCommentEvent[] = [];
+
+  if (payload.object !== "page") return events;
+
+  for (const entry of payload.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      if (change.field !== "feed") continue;
+
+      const value = change.value;
+      if (value?.item !== "comment" || value.verb !== "add") continue;
+
+      const commentId = value.comment_id;
+      const postId = value.post_id;
+      const commenterId = value.from?.id;
+      if (!entry.id || !commentId || !postId || !commenterId) continue;
+
+      // A reply to another comment, not to the post itself.
+      if (value.parent_id && value.parent_id !== postId) continue;
+      // The Page commenting on its own post.
+      if (commenterId === entry.id) continue;
+
+      events.push({
+        instagramAccountId: entry.id,
+        commentId,
+        commentText: value.message ?? "",
+        commenterId,
+        commenterName: value.from?.name,
+        mediaId: postId,
       });
     }
   }

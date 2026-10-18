@@ -124,9 +124,19 @@ model WorkspaceInvitation {
   @@index([status])
 }
 
+// Where a connected account lives. The table is still called InstagramAccount;
+// a Facebook Page reuses it so automations, logs, queues and billing need no
+// duplicate. For FACEBOOK, `instagramId` holds the Page ID, `username` the Page
+// name and `accessToken` the (non-expiring) Page access token.
+enum AccountPlatform {
+  INSTAGRAM
+  FACEBOOK
+}
+
 model InstagramAccount {
   id                String   @id @default(cuid())
   workspaceId       String
+  platform          AccountPlatform @default(INSTAGRAM)
   instagramId       String   @unique
   username          String
   name              String?

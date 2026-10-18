@@ -46,6 +46,23 @@ export function getMissingInstagramOAuthEnv(): string[] {
   });
 }
 
+// Facebook Login (Pages) needs the Meta app's own ID — a different value from
+// INSTAGRAM_APP_ID, which belongs to the Instagram product of the same app.
+const FACEBOOK_OAUTH_ENV = [
+  "FACEBOOK_APP_ID",
+  "FACEBOOK_APP_SECRET",
+  "ENCRYPTION_KEY",
+  "NEXTAUTH_SECRET",
+] as const;
+
+export function getMissingFacebookOAuthEnv(): string[] {
+  return FACEBOOK_OAUTH_ENV.filter((name) => {
+    const value = process.env[name];
+    if (!value) return true;
+    return name === "ENCRYPTION_KEY" && !HEX_32_BYTE.test(value);
+  });
+}
+
 export function getMetaGraphApiVersion(): string {
   return process.env.META_GRAPH_API_VERSION ?? "v25.0";
 }

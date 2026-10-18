@@ -16,6 +16,9 @@ const {
   mockQueueAdd,
   mockReserveWorkspaceDMSend,
   mockReleaseWorkspaceDMReservation,
+  mockFbPrivateReply,
+  mockFbPrivateReplyWithLinkButton,
+  mockFbCommentReply,
 } = vi.hoisted(() => ({
   mockPrisma: {
     automation: {
@@ -51,6 +54,9 @@ const {
   mockQueueAdd: vi.fn(),
   mockReserveWorkspaceDMSend: vi.fn(),
   mockReleaseWorkspaceDMReservation: vi.fn(),
+  mockFbPrivateReply: vi.fn(),
+  mockFbPrivateReplyWithLinkButton: vi.fn(),
+  mockFbCommentReply: vi.fn(),
 }));
 
 vi.mock("@/lib/db/client", () => ({
@@ -85,6 +91,12 @@ vi.mock("@/lib/meta/client", () => ({
   RateLimitError: class RateLimitError extends Error {
     name = "RateLimitError";
   },
+}));
+
+vi.mock("@/lib/meta/facebook", () => ({
+  sendFacebookPrivateReply: mockFbPrivateReply,
+  sendFacebookPrivateReplyWithLinkButton: mockFbPrivateReplyWithLinkButton,
+  sendFacebookCommentReply: mockFbCommentReply,
 }));
 
 vi.mock("@/lib/meta/oauth", () => ({
@@ -286,6 +298,15 @@ beforeEach(() => {
     message_id: "msg_006",
   });
   mockGetUserFollowStatus.mockResolvedValue(true);
+  mockFbPrivateReply.mockResolvedValue({
+    recipient_id: "commenter_999",
+    message_id: "fb_msg_001",
+  });
+  mockFbPrivateReplyWithLinkButton.mockResolvedValue({
+    recipient_id: "commenter_999",
+    message_id: "fb_msg_002",
+  });
+  mockFbCommentReply.mockResolvedValue({ id: "fb_reply_001" });
 });
 
 describe("DM Worker — Full Pipeline", () => {
@@ -1339,5 +1360,122 @@ describe("DM Worker — follow gate re-check", () => {
 
     expect(mockSendDirectMessage).not.toHaveBeenCalled();
     expect(mockReserveWorkspaceDMSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("DM Worker — Facebook Pages", () => {
+  const facebookAutomation = {
+    ...mockAutomation,
+    instagramAccount: {
+      id: "page_row_1",
+      instagramId: "page_456",
+      platform: "FACEBOOK",
+      accessToken: "encrypted_page_token",
+    },
+  };
+  const facebookJob = { ...mockJobData, instagramAccountId: "page_456" };
+
+  beforeEach(() => {
+    mockPrisma.automation.findMany.mockResolvedValue([facebookAutomation]);
+  });
+
+  it("should send the private reply through the Facebook API, not Instagram's", async () => {
+    const processor = getProcessor();
+    await processor(createMockJob(facebookJob));
+
+    expect(mockFbPrivateReply).toHaveBeenCalledWith(
+      "decrypted_token",
+      "page_456",
+      "comment_555",
+      "Hey commenter_user! Here is the link: https://example.com"
+    );
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+    expect(mockPrisma.dmLog.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "SENT" }),
+      })
+    );
+  });
+
+  it("should never gate on a follow, nor send an opening DM, even if the campaign asks", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        ...facebookAutomation,
+        requireFollow: true,
+        openingDmEnabled: true,
+        openingDmMessage: "Welcome!",
+        openingDmButtonLabel: "Get it",
+      },
+    ]);
+
+    const processor = getProcessor();
+    await processor(createMockJob(facebookJob));
+
+    // Meta has no follower check for Pages, so the link goes straight out.
+    expect(mockGetUserFollowStatus).not.toHaveBeenCalled();
+    expect(mockSendPrivateReplyWithButton).not.toHaveBeenCalled();
+    expect(mockFbPrivateReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("should deliver tracked links as buttons through the Facebook API", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        ...facebookAutomation,
+        linkButtonLabel: "Get the guide",
+        trackedLinks: [
+          { slug: "abc123", label: null, destinationUrl: "https://example.com" },
+        ],
+      },
+    ]);
+
+    const processor = getProcessor();
+    await processor(createMockJob(facebookJob));
+
+    expect(mockFbPrivateReplyWithLinkButton).toHaveBeenCalledWith(
+      "decrypted_token",
+      "page_456",
+      "comment_555",
+      "Hey commenter_user! Here is the link: https://example.com",
+      [{ title: "Get the guide", url: "http://localhost:3000/r/abc123" }]
+    );
+    expect(mockSendPrivateReplyWithLinkButton).not.toHaveBeenCalled();
+  });
+
+  it("should post the public reply through the Facebook API", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        ...facebookAutomation,
+        publicReplyEnabled: true,
+        publicReplyMessage: "Check Messenger!",
+        publicReplyMessages: ["Check Messenger!"],
+      },
+    ]);
+
+    const processor = getProcessor();
+    await processor(createMockJob(facebookJob));
+
+    expect(mockFbCommentReply).toHaveBeenCalledWith(
+      "decrypted_token",
+      "comment_555",
+      "Check Messenger!"
+    );
+    expect(sendCommentReply).not.toHaveBeenCalled();
+  });
+
+  it("should treat an unconfirmed Facebook send like any other and not retry it", async () => {
+    mockFbPrivateReply.mockRejectedValue(new Error("socket hang up"));
+
+    const processor = getProcessor();
+    await expect(
+      processor(createMockJob(facebookJob))
+    ).resolves.toBeUndefined();
+
+    expect(mockPrisma.dmLog.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          errorMessage: expect.stringMatching(/^Delivery unconfirmed:/),
+        }),
+      })
+    );
   });
 });

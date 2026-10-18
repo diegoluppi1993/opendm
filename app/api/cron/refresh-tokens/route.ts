@@ -32,6 +32,8 @@ export async function GET(request: NextRequest) {
   const accountsToRefresh = await prisma.instagramAccount.findMany({
     where: {
       accessToken: { not: "" },
+      // Page access tokens do not expire and use a different refresh flow.
+      platform: "INSTAGRAM",
       tokenExpiresAt: {
         not: null,
         lte: cutoffDate,

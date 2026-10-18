@@ -32,6 +32,11 @@ import {
   releaseWorkspaceDMReservation,
   reserveWorkspaceDMSend,
 } from "@/lib/billing/usage";
+import {
+  sendFacebookCommentReply,
+  sendFacebookPrivateReply,
+  sendFacebookPrivateReplyWithLinkButton,
+} from "@/lib/meta/facebook";
 import { recordWorkerAlert } from "@/lib/ops/worker-health";
 import {
   MAX_COMMENT_SEND_ATTEMPTS,
@@ -304,6 +309,20 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
   });
 
   for (const automation of automations) {
+    // A connected Facebook Page sends through the Messenger/Page API instead of
+    // Instagram's, with the same signatures. Facebook has no follower check and
+    // no opening-DM button flow (see below), so those paths are Instagram-only.
+    const isFacebook = automation.instagramAccount.platform === "FACEBOOK";
+    const sendPublicReply = isFacebook
+      ? sendFacebookCommentReply
+      : sendCommentReply;
+    const sendPrivate = isFacebook
+      ? sendFacebookPrivateReply
+      : sendPrivateReply;
+    const sendPrivateWithLink = isFacebook
+      ? sendFacebookPrivateReplyWithLinkButton
+      : sendPrivateReplyWithLinkButton;
+
     // "Any word" campaigns fire on every comment; otherwise require a keyword hit.
     const matchResult = automation.matchAnyWord
       ? { matched: true, matchedKeyword: null }
@@ -466,7 +485,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           commenterName,
           trackedLinks: automation.trackedLinks,
         });
-        await sendCommentReply(accessToken, commentId, publicReply);
+        await sendPublicReply(accessToken, commentId, publicReply);
         await prisma.dmLog.update({
           where: {
             automationId_commentId: { automationId: automation.id, commentId },
@@ -627,6 +646,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
     // fires a postback that delivers the reveal (see processPostback). Without
     // one, we send the reveal text directly as today.
     const useOpeningDm =
+      !isFacebook &&
       automation.openingDmEnabled &&
       Boolean(automation.openingDmMessage) &&
       Boolean(automation.openingDmButtonLabel);
@@ -637,7 +657,9 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
     // status at comment time: confirmed followers get the link now, everyone
     // else gets the "follow me first" prompt (re-verified on tap).
     let sendFollowPrompt = false;
-    if (automation.requireFollow && !useOpeningDm) {
+    // Never on Facebook: Meta exposes no way to ask whether someone follows a
+    // Page, so a Facebook campaign always delivers.
+    if (automation.requireFollow && !useOpeningDm && !isFacebook) {
       const alreadyFollows = await getUserFollowStatus(accessToken, commenterId);
       sendFollowPrompt = alreadyFollows !== true;
     }
@@ -699,7 +721,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         );
 
         try {
-          await sendPrivateReplyWithLinkButton(
+          await sendPrivateWithLink(
             accessToken,
             automation.instagramAccount.instagramId,
             commentId,
@@ -723,7 +745,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
             bodyText
           );
           try {
-            await sendPrivateReply(
+            await sendPrivate(
               accessToken,
               automation.instagramAccount.instagramId,
               commentId,
@@ -742,7 +764,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           commenterName,
           trackedLinks: automation.trackedLinks,
         });
-        await sendPrivateReply(
+        await sendPrivate(
           accessToken,
           automation.instagramAccount.instagramId,
           commentId,
