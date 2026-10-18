@@ -7,7 +7,7 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && apt-get install -y --no-install-recommends ca-certificates openssl wget \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base AS dependencies
@@ -44,6 +44,8 @@ COPY --chown=node:node public ./public
 COPY --chown=node:node prisma ./prisma
 COPY --chown=node:node lib ./lib
 COPY --chown=node:node worker ./worker
+# The cron service runs scripts/cron.sh (needs wget, installed in the base stage).
+COPY --chown=node:node scripts ./scripts
 
 USER node
 
