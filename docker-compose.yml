@@ -54,7 +54,16 @@ services:
       META_GRAPH_API_VERSION: ${META_GRAPH_API_VERSION:-v25.0}
       INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
       INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+      # Facebook Pages (optional): the Meta app's own App ID, not INSTAGRAM_APP_ID.
+      FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
       FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
+      # Follow gate: re-check delays (ms) and an optional "checking…" DM.
+      FOLLOW_RECHECK_DELAYS_MS: ${FOLLOW_RECHECK_DELAYS_MS:-20000,40000}
+      FOLLOW_RECHECK_ACK_MESSAGE: ${FOLLOW_RECHECK_ACK_MESSAGE:-}
+      # Connections per process to PostgreSQL, and when /api/health reports a
+      # backed-up queue.
+      DB_POOL_MAX: ${DB_POOL_MAX:-3}
+      HEALTH_STUCK_QUEUE_WAITING: ${HEALTH_STUCK_QUEUE_WAITING:-25}
       WEBHOOK_VERIFY_TOKEN: ${WEBHOOK_VERIFY_TOKEN:?WEBHOOK_VERIFY_TOKEN is required}
     depends_on:
       postgres:
@@ -111,6 +120,21 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  # Scheduler for /api/cron/*. On Vercel these run from vercel.json; nothing
+  # reads that file here, so without this service Instagram tokens are never
+  # refreshed (they expire after ~60 days and every automation stops silently).
+  cron:
+    image: opendm-app:local
+    build:
+      context: .
+      target: runtime
+    command: ["sh", "scripts/cron.sh"]
+    restart: unless-stopped
+    environment: *app-environment
+    depends_on:
+      web:
+        condition: service_healthy
 
 volumes:
   pgdata:

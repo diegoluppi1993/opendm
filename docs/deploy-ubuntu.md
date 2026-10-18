@@ -106,7 +106,15 @@ META_GRAPH_API_VERSION=v25.0
 INSTAGRAM_APP_ID=CHANGE_ME
 INSTAGRAM_APP_SECRET=CHANGE_ME
 FACEBOOK_APP_SECRET=CHANGE_ME
+
+# Facebook Pages (optional) — the Meta app's own App ID, not INSTAGRAM_APP_ID
+FACEBOOK_APP_ID=CHANGE_ME
 ```
+
+Optional tuning variables (`FOLLOW_RECHECK_DELAYS_MS`,
+`FOLLOW_RECHECK_ACK_MESSAGE`, `DB_POOL_MAX`, `HEALTH_STUCK_QUEUE_WAITING`) are
+listed in `.env.example`; the defaults are fine unless you have a reason to
+change them. Leave `FACEBOOK_APP_ID` empty if you only use Instagram.
 
 Check the file permissions:
 
@@ -151,7 +159,14 @@ curl --fail http://127.0.0.1:3000/api/health
 ```
 
 An exited `migrate` container with exit code `0` is expected. Web, worker,
-PostgreSQL, and Redis should remain running and healthy.
+cron, PostgreSQL, and Redis should remain running and healthy.
+
+The `cron` service calls the maintenance endpoints under `/api/cron` — most
+importantly the daily Instagram token refresh. Check that it is running:
+
+```bash
+docker compose logs --tail=20 cron
+```
 
 ## 6. Configure the public Meta URLs
 
@@ -168,6 +183,17 @@ Data deletion:      https://opendm.example.com/data-deletion
 
 Subscribe the Instagram webhook to the `comments` and `messages` fields needed
 by the enabled OpenDM features.
+
+To also connect Facebook Pages, add the Facebook Login product to the same Meta
+app and register this OAuth redirect URI:
+
+```text
+OAuth redirect URI: https://opendm.example.com/api/facebook/callback
+```
+
+Then add the **Page** object to the webhook (same callback URL and verify
+token) and subscribe it to the `feed` field. See `docs/facebook.md` for the
+permissions and limits.
 
 ## 7. Update an existing installation
 
