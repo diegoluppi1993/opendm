@@ -26,7 +26,9 @@ export async function GET(request: NextRequest) {
   }
 
   const accounts = await prisma.instagramAccount.findMany({
-    where: { accessToken: { not: "" } },
+    // Follower history comes from the Instagram API; a Facebook Page has no
+    // equivalent field, so Pages are skipped rather than logged as failures.
+    where: { accessToken: { not: "" }, platform: "INSTAGRAM" },
     select: {
       id: true,
       workspaceId: true,

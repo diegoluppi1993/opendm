@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/client";
 import { getDMQueue } from "@/lib/queue/client";
 import {
   parseCommentEvents,
+  parseFacebookCommentEvents,
   parseMessageEvents,
   parsePostbackEvents,
   parseReadEvents,
@@ -79,9 +80,14 @@ export async function POST(request: NextRequest) {
   });
 
   try {
-    const commentEvents = parseCommentEvents(
-      payload as Parameters<typeof parseCommentEvents>[0]
-    );
+    // Instagram comments and Facebook Page comments arrive on the same endpoint
+    // (object "instagram" vs "page"); each parser ignores the other's payloads.
+    const commentEvents = [
+      ...parseCommentEvents(payload as Parameters<typeof parseCommentEvents>[0]),
+      ...parseFacebookCommentEvents(
+        payload as Parameters<typeof parseFacebookCommentEvents>[0]
+      ),
+    ];
     const queue = getDMQueue();
 
     for (const event of commentEvents) {

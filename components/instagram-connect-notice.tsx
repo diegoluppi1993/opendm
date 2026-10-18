@@ -29,6 +29,12 @@ const MESSAGES: Record<string, { tone: Tone; title: string; detail: string }> = 
     detail:
       "Only workspace owners and admins can connect an Instagram account.",
   },
+  no_pages: {
+    tone: "warning",
+    title: "No Facebook Page found",
+    detail:
+      "Facebook did not return any Page you manage. Start again and, in the permission dialog, choose the Page(s) to connect.",
+  },
   already_connected: {
     tone: "warning",
     title: "Account already connected",

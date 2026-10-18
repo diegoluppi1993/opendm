@@ -35,6 +35,10 @@ import {
 } from "@/lib/meta/client";
 import { decryptToken } from "@/lib/meta/oauth";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
+import {
+  MAX_COMMENT_SEND_ATTEMPTS,
+  hasUnconfirmedDelivery,
+} from "@/lib/instagram/delivery-errors";
 
 // Only consider comments from the last few days — older ones are outside
 // Instagram's private-reply window anyway, so a DM to them would just fail.
@@ -63,7 +67,9 @@ function errMessage(error: unknown): string {
 /** One reconciliation pass across every active campaign. */
 export async function reconcileComments(): Promise<void> {
   const automations = await prisma.automation.findMany({
-    where: { isActive: true },
+    // Polling uses the Instagram comments API; Facebook Pages rely on the
+    // webhook alone until a Page sweep exists.
+    where: { isActive: true, instagramAccount: { platform: "INSTAGRAM" } },
     select: {
       id: true,
       name: true,
@@ -201,22 +207,44 @@ async function sweepCampaign(
     if (needsAction.length === 0) continue;
 
     // Second guard against races: skip comments this campaign has already fully
-    // handled. "Fully handled" depends on the campaign: if it posts a public
-    // reply, the completion signal is publicReplySentAt (a DM alone is not
-    // enough — the reply still has to land); otherwise a SENT DM is enough. This
-    // is what lets a comment whose DM sent but whose public reply failed come
-    // back and retry the reply.
-    const handled = await prisma.dmLog.findMany({
+    // handled. A comment is done when each leg the campaign uses has stopped:
+    // the DM was sent, skipped for the plan limit, may already have been
+    // delivered (unconfirmed), or ran out of attempts; and, if the campaign posts
+    // a public reply, that reply landed or may already have. This still lets a
+    // comment whose DM sent but whose public reply failed come back and retry
+    // the reply, while an unconfirmed send is never re-enqueued — doing so is
+    // what once sent one person dozens of identical DMs.
+    // (Ported from diwenne/openreply #68.)
+    const logs = await prisma.dmLog.findMany({
       where: {
         automationId: automation.id,
         commentId: { in: needsAction.map((c) => c.id) },
-        ...(automation.publicReplyEnabled
-          ? { publicReplySentAt: { not: null } }
-          : { status: "SENT" }),
       },
-      select: { commentId: true },
+      select: {
+        commentId: true,
+        status: true,
+        attempts: true,
+        errorMessage: true,
+        publicReplySentAt: true,
+        publicReplyError: true,
+      },
     });
-    const handledSet = new Set(handled.map((h) => h.commentId));
+    const handledSet = new Set(
+      logs
+        .filter((log) => {
+          const dmStopped =
+            log.status === "SENT" ||
+            log.status === "SKIPPED_PLAN_LIMIT" ||
+            log.attempts >= MAX_COMMENT_SEND_ATTEMPTS ||
+            hasUnconfirmedDelivery(log.errorMessage, log.status === "FAILED");
+          const replyStopped =
+            !automation.publicReplyEnabled ||
+            Boolean(log.publicReplySentAt) ||
+            hasUnconfirmedDelivery(log.publicReplyError);
+          return dmStopped && replyStopped;
+        })
+        .map((log) => log.commentId)
+    );
 
     // Oldest first, so whoever commented earliest gets answered first, capped.
     const fresh = needsAction

@@ -71,14 +71,35 @@ describe("agency workspace helpers", () => {
   it("selects a requested workspace account or falls back to the latest account", async () => {
     mockPrisma.instagramAccount.findFirst.mockResolvedValue({ id: "account_1" });
 
+    // Instagram-only by default: most endpoints call Instagram APIs, which a
+    // connected Facebook Page's token cannot use.
     await getWorkspaceInstagramAccount("workspace_123", "account_1");
     expect(mockPrisma.instagramAccount.findFirst).toHaveBeenCalledWith({
-      where: { id: "account_1", workspaceId: "workspace_123" },
+      where: {
+        id: "account_1",
+        workspaceId: "workspace_123",
+        platform: "INSTAGRAM",
+      },
     });
 
     await getWorkspaceInstagramAccount("workspace_123", "all");
     expect(mockPrisma.instagramAccount.findFirst).toHaveBeenLastCalledWith({
-      where: { workspaceId: "workspace_123" },
+      where: { workspaceId: "workspace_123", platform: "INSTAGRAM" },
+      orderBy: { connectedAt: "desc" },
+    });
+  });
+
+  it("can look across platforms for endpoints that support both", async () => {
+    mockPrisma.instagramAccount.findFirst.mockResolvedValue({ id: "page_1" });
+
+    await getWorkspaceInstagramAccount("workspace_123", "page_1", "ANY");
+    expect(mockPrisma.instagramAccount.findFirst).toHaveBeenCalledWith({
+      where: { id: "page_1", workspaceId: "workspace_123" },
+    });
+
+    await getWorkspaceInstagramAccount("workspace_123", null, "FACEBOOK");
+    expect(mockPrisma.instagramAccount.findFirst).toHaveBeenLastCalledWith({
+      where: { workspaceId: "workspace_123", platform: "FACEBOOK" },
       orderBy: { connectedAt: "desc" },
     });
   });
